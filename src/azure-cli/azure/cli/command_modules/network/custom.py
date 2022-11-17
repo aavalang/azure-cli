@@ -8320,8 +8320,25 @@ def rdp_bastion_host(cmd, target_resource_id, resource_group_name, bastion_host_
     if not is_valid_resource_id(target_resource_id):
         raise InvalidArgumentValueError("Please enter a valid resource Id. If this is not working, try opening the JSON View of your resource (in the Overview tab), and copying the full resource id.")
     if platform.system() == 'Windows':
-        if disable_gateway:
-            tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port)
+        client = network_client_factory(cmd.cli_ctx).bastion_hosts
+        bastion = client.get(resource_group_name, bastion_host_name)
+        logger.warning('Bastion Host Body: %s', bastion)
+        #if bastion.sku.name == "Basic" or bastion.enable_tunneling != True:
+        #    raise CLIError('Bastion Host SKU must be Standard and Native Client must be enabled.')
+        
+        if bastion.sku.name == 'QuickConnect':
+            #datapod_url = str(_get_data_pod(cmd, resource_port, target_resource_id, bastion))
+            datapod_url = "374511cd722b470889d5c2703e742727.centraluseuap.data.prod.bastionglobal.azure.com"
+            logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
+            tunnel_server = get_tunnel(cmd, bastion, datapod_url, target_resource_id, resource_port)
+            t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
+            t.daemon = True
+            t.start()
+            command = [_get_rdp_path(), "/v:localhost:{0}".format(tunnel_server.local_port)]
+            launch_and_wait(command)
+            tunnel_server.cleanup()
+        elif disable_gateway:
+            tunnel_server = get_tunnel(cmd, bastion, target_resource_id, resource_port)
             t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
             t.daemon = True
             t.start()
@@ -8332,8 +8349,6 @@ def rdp_bastion_host(cmd, target_resource_id, resource_group_name, bastion_host_
             profile = Profile(cli_ctx=cmd.cli_ctx)
             access_token = profile.get_raw_token()[0][2].get('accessToken')
             logger.debug("Response %s", access_token)
-            client = network_client_factory(cmd.cli_ctx).bastion_hosts
-            bastion = client.get(resource_group_name, bastion_host_name)
             web_address = 'https://{}/api/rdpfile?resourceId={}&format=rdp&rdpport={}&enablerdsaad={}'.format(bastion.dns_name, target_resource_id, resource_port, enable_mfa)
             headers = {}
             headers['Authorization'] = 'Bearer {}'.format(access_token)
@@ -8354,14 +8369,34 @@ def rdp_bastion_host(cmd, target_resource_id, resource_group_name, bastion_host_
     else:
         raise UnrecognizedArgumentError("Platform is not supported for this command. Supported platforms: Windows")
 
+def _get_data_pod(cmd, resource_port, target_resource_id, bastion):
+    from azure.cli.core._profile import Profile
+    from azure.cli.core.util import should_disable_connection_verify
+    import json
+    profile = Profile(cli_ctx=cmd.cli_ctx)
+    # Generate an Azure token with the VSTS resource app id
+    auth_token, _, _ = profile.get_raw_token()
+    content = {
+        'resourceId': target_resource_id,
+        'bastionResourceId': bastion.id,
+        'vmPort': resource_port,
+        'azToken': auth_token[1]
+    }
+    headers = {
+            'Content-Type': 'application/json',
+        }
 
-def get_tunnel(cmd, resource_group_name, name, vm_id, resource_port, port=None):
+    web_address = 'https://{}/api/connection'.format(bastion.dns_name)
+    response = requests.post(web_address, json=content, headers=headers, verify=(not should_disable_connection_verify()))
+    response_json = None
+    
+    return response.content
+
+def get_tunnel(cmd, bastion, datapodurl, vm_id, resource_port, port=None):
     from .tunnel import TunnelServer
-    client = network_client_factory(cmd.cli_ctx).bastion_hosts
-    bastion = client.get(resource_group_name, name)
     if port is None:
         port = 0  # Will auto-select a free port from 1024-65535
-    tunnel_server = TunnelServer(cmd.cli_ctx, 'localhost', port, bastion, vm_id, resource_port)
+    tunnel_server = TunnelServer(cmd.cli_ctx, 'localhost', port, bastion, vm_id, resource_port, datapodurl)
     return tunnel_server
 
 
@@ -8375,7 +8410,10 @@ def tunnel_close_handler(tunnel):
 def create_bastion_tunnel(cmd, target_resource_id, resource_group_name, bastion_host_name, resource_port, port, timeout=None):
     if not is_valid_resource_id(target_resource_id):
         raise InvalidArgumentValueError("Please enter a valid Virtual Machine resource Id.")
-    tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port, port)
+    #tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port, port)
+    datapod_url = "374511cd722b470889d5c2703e742727.centraluseuap.data.prod.bastionglobal.azure.com"
+    logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
+    tunnel_server = get_tunnel(cmd, "BastionQc", datapod_url, target_resource_id, resource_port) 
     t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
     t.daemon = True
     t.start()

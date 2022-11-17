@@ -38,12 +38,13 @@ logger = get_logger(__name__)
 
 # pylint: disable=no-member,too-many-instance-attributes,bare-except,no-self-use
 class TunnelServer:
-    def __init__(self, cli_ctx, local_addr, local_port, bastion, remote_host, remote_port):
+    def __init__(self, cli_ctx, local_addr, local_port, bastion, remote_host, remote_port, datapod_url):
         self.local_addr = local_addr
         self.local_port = int(local_port)
         if self.local_port != 0 and not self.is_port_open():
             raise CLIError('Defined port is currently unavailable')
         self.bastion = bastion
+        self.datapod_url = datapod_url
         self.remote_host = remote_host
         self.remote_port = remote_port
         self.client = None
@@ -83,12 +84,14 @@ class TunnelServer:
             'aztoken': auth_token[1],
             'token': self.last_token,
         }
+
+        logger.info('Request: %s', content)
         if self.node_id:
             custom_header = {'X-Node-Id': self.node_id}
         else:
             custom_header = {}
 
-        web_address = 'https://{}/api/tokens'.format(self.bastion.dns_name)
+        web_address = 'https://{}/api/tokens'.format(self.datapod_url)
         response = requests.post(web_address, data=content, headers=custom_header,
                                  verify=(not should_disable_connection_verify()))
         response_json = None
@@ -105,7 +108,7 @@ class TunnelServer:
 
         self.last_token = response_json["authToken"]
         self.node_id = response_json["nodeId"]
-        return response_json["websocketToken"]
+        return self.last_token
 
     def _listen(self):
         self.sock.setblocking(True)
@@ -114,8 +117,8 @@ class TunnelServer:
         while True:
             self.client, _address = self.sock.accept()
 
-            auth_token = self._get_auth_token()
-            host = 'wss://{}/webtunnelv2/{}?X-Node-Id={}'.format(self.bastion.dns_name, auth_token, self.node_id)
+            auth_token = "13B3EEFF4C9B33C7176C790E8B94BB31BC846DE7A3C18DF61729119E586E900E"
+            host = 'wss://{}/webtunnel/{}?X-Node-Id={}'.format(self.datapod_url, auth_token, self.node_id)
             verify_mode = ssl.CERT_NONE if should_disable_connection_verify() else ssl.CERT_REQUIRED
             self.ws = create_connection(host,
                                         sockopt=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),),
@@ -192,7 +195,7 @@ class TunnelServer:
             else:
                 custom_header = {}
 
-            web_address = 'https://{}/api/tokens/{}'.format(self.bastion.dns_name, self.last_token)
+            web_address = 'https://{}/api/tokens/{}'.format(self.datapod_url, self.last_token)
             response = requests.delete(web_address, headers=custom_header,
                                        verify=(not should_disable_connection_verify()))
             if response.status_code == 404:
