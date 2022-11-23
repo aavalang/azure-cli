@@ -8271,14 +8271,29 @@ def ssh_bastion_host(cmd, auth_type, target_resource_id, resource_group_name, ba
     if not is_valid_resource_id(target_resource_id):
         raise InvalidArgumentValueError("Please enter a valid resource Id. If this is not working, try opening the JSON View of your resource (in the Overview tab), and copying the full resource id.")
 
-    tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port)
+    #tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port)
+    #datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
+
+    client = network_client_factory(cmd.cli_ctx).bastion_hosts
+    bastion = client.get(resource_group_name, bastion_host_name)
+
+    if bastion.sku.name == 'QuickConnect':
+        datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
+        #datapod_url = "15b0b636c08247d08478a87779f0084e.data.test.bastionglobal.azure.com"
+        logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
+        dns_name = datapod_url
+    else:
+        dns_name = bastion.dns_name
+
+    tunnel_server = get_tunnel(cmd, resource_group_name, dns_name, bastion, target_resource_id, resource_port)
     t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
+
     t.daemon = True
     t.start()
     if auth_type.lower() == 'password':
         if username is None:
             raise RequiredArgumentMissingError("Please enter username with --username.")
-        command = [_get_ssh_path(), _get_host(username, 'localhost')]
+        command = [_get_ssh_path(), "-vvv", _get_host(username, 'localhost')]
     elif auth_type.lower() == 'aad':
         azssh = _get_azext_module(SSH_EXTENSION_NAME, SSH_EXTENSION_MODULE)
         azssh_utils = _get_azext_module(SSH_EXTENSION_NAME, SSH_UTILS_EXTENSION_MODULE)
@@ -8320,8 +8335,24 @@ def rdp_bastion_host(cmd, target_resource_id, resource_group_name, bastion_host_
     if not is_valid_resource_id(target_resource_id):
         raise InvalidArgumentValueError("Please enter a valid resource Id. If this is not working, try opening the JSON View of your resource (in the Overview tab), and copying the full resource id.")
     if platform.system() == 'Windows':
+        client = network_client_factory(cmd.cli_ctx).bastion_hosts
+        bastion = client.get(resource_group_name, bastion_host_name)
+
+        if bastion.sku.name == "Basic" or bastion.sku.name == "Standard" and bastion.enable_tunneling != True:
+            raise CLIError('Bastion Host SKU must be Standard and Native Client must be enabled.')
+
+        if bastion.sku.name == 'QuickConnect':
+            datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
+            logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
+            tunnel_server = get_tunnel(cmd, bastion, datapod_url, bastion, target_resource_id, resource_port)
+            #t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
+            #t.daemon = True
+            #t.start()
+            #command = [_get_rdp_path(), "/v:localhost:{0}".format(tunnel_server.local_port)]
+            #launch_and_wait(command)
+            #tunnel_server.cleanup()
         if disable_gateway:
-            tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port)
+            tunnel_server = get_tunnel(cmd, resource_group_name, bastion.dns_name, bastion, target_resource_id, resource_port)
             t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
             t.daemon = True
             t.start()
@@ -8354,14 +8385,36 @@ def rdp_bastion_host(cmd, target_resource_id, resource_group_name, bastion_host_
     else:
         raise UnrecognizedArgumentError("Platform is not supported for this command. Supported platforms: Windows")
 
+def _get_data_pod(cmd, resource_port, target_resource_id, bastion):
+    from azure.cli.core._profile import Profile
+    from azure.cli.core.util import should_disable_connection_verify
+    import json
+    profile = Profile(cli_ctx=cmd.cli_ctx)
+    # Generate an Azure token with the VSTS resource app id
+    auth_token, _, _ = profile.get_raw_token()
+    content = {
+        'resourceId': target_resource_id,
+        'bastionResourceId': bastion.id,
+        'vmPort': resource_port,
+        'azToken': auth_token[1]
+    }
+    headers = {
+            'Content-Type': 'application/json',
+        }
 
-def get_tunnel(cmd, resource_group_name, name, vm_id, resource_port, port=None):
+    logger.debug('Body: %s', content)
+    web_address = 'https://{}/api/connection'.format("omnibrain.test.bastionglobal.azure.com")
+    response = requests.post(web_address, json=content, headers=headers, verify=(not should_disable_connection_verify()))
+    response_json = None
+    
+    logger.debug('Response: %s', response.content)
+    return response.content.decode("utf-8")
+
+def get_tunnel(cmd, resource_group_name, dns_name, bastion, vm_id, resource_port, port=None):
     from .tunnel import TunnelServer
-    client = network_client_factory(cmd.cli_ctx).bastion_hosts
-    bastion = client.get(resource_group_name, name)
     if port is None:
         port = 0  # Will auto-select a free port from 1024-65535
-    tunnel_server = TunnelServer(cmd.cli_ctx, 'localhost', port, bastion, vm_id, resource_port)
+    tunnel_server = TunnelServer(cmd.cli_ctx, 'localhost', port, dns_name, bastion, vm_id, resource_port)
     return tunnel_server
 
 
@@ -8375,7 +8428,19 @@ def tunnel_close_handler(tunnel):
 def create_bastion_tunnel(cmd, target_resource_id, resource_group_name, bastion_host_name, resource_port, port, timeout=None):
     if not is_valid_resource_id(target_resource_id):
         raise InvalidArgumentValueError("Please enter a valid Virtual Machine resource Id.")
-    tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port, port)
+    
+    client = network_client_factory(cmd.cli_ctx).bastion_hosts
+    bastion = client.get(resource_group_name, bastion_host_name)
+
+    if bastion.sku.name == 'QuickConnect':
+        datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
+        #datapod_url = "15b0b636c08247d08478a87779f0084e.data.test.bastionglobal.azure.com"
+        logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
+        dns_name = datapod_url
+    else:
+        dns_name = bastion.dns_name
+        
+    tunnel_server = get_tunnel(cmd, resource_group_name, dns_name, bastion, target_resource_id, resource_port, port)
     t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
     t.daemon = True
     t.start()
