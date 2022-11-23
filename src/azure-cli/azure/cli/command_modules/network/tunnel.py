@@ -107,6 +107,41 @@ class TunnelServer:
         self.last_token = response_json["authToken"]
         self.node_id = response_json["nodeId"]
         return self.last_token
+    
+    def _get_auth_tokenv2(self):
+        profile = Profile(cli_ctx=self.cli_ctx)
+        # Generate an Azure token with the VSTS resource app id
+        auth_token, _, _ = profile.get_raw_token()
+        content = {
+            'resourceId': self.remote_host,
+            'protocol': 'tcptunnel',
+            'workloadHostPort': self.remote_port,
+            'aztoken': auth_token[1],
+            'token': self.last_token,
+        }
+        if self.node_id:
+            custom_header = {'X-Node-Id': self.node_id}
+        else:
+            custom_header = {}
+
+        web_address = 'https://{}/api/tokens'.format(self.dns_name)
+        response = requests.post(web_address, data=content, headers=custom_header,
+                                 verify=(not should_disable_connection_verify()))
+        response_json = None
+
+        if response.content is not None:
+            response_json = json.loads(response.content.decode("utf-8"))
+
+        if response.status_code not in [200]:
+            if response_json is not None and response_json["message"] is not None:
+                exp = CloudError(response, error=response_json["message"])
+            else:
+                exp = CloudError(response)
+            raise exp
+
+        self.last_token = response_json["authToken"]
+        self.node_id = response_json["nodeId"]
+        return response_json["websocketToken"]
 
     def _listen(self):
         self.sock.setblocking(True)
@@ -115,12 +150,13 @@ class TunnelServer:
         while True:
             self.client, _address = self.sock.accept()
 
-            auth_token = self._get_auth_token()
             if(self.bastion.sku.name == "QuickConnect"):
+                auth_token = self._get_auth_token()
                 host = 'wss://{}/webtunnel/omni/{}'.format(self.dns_name, auth_token)
             else:
+                auth_token = self._get_auth_tokenv2()
                 host = 'wss://{}/webtunnelv2/{}?X-Node-Id={}'.format(self.dns_name, auth_token, self.node_id)
-                
+
             verify_mode = ssl.CERT_NONE if should_disable_connection_verify() else ssl.CERT_REQUIRED
             self.ws = create_connection(host,
                                         sockopt=((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),),
