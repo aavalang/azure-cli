@@ -8396,7 +8396,8 @@ def _get_data_pod(cmd, resource_port, target_resource_id, bastion):
         'resourceId': target_resource_id,
         'bastionResourceId': bastion.id,
         'vmPort': resource_port,
-        'azToken': auth_token[1]
+        'azToken': auth_token[1],
+        'connectionType': 'nativeclient'
     }
     headers = {
             'Content-Type': 'application/json',
