@@ -108,7 +108,7 @@ class TunnelServer:
         self.node_id = response_json["nodeId"]
         return self.last_token
     
-    def _get_auth_tokenv2(self):
+    def _get_websocket_token(self):
         profile = Profile(cli_ctx=self.cli_ctx)
         # Generate an Azure token with the VSTS resource app id
         auth_token, _, _ = profile.get_raw_token()
@@ -154,7 +154,7 @@ class TunnelServer:
                 auth_token = self._get_auth_token()
                 host = 'wss://{}/webtunnel/omni/{}'.format(self.dns_name, auth_token)
             else:
-                auth_token = self._get_auth_tokenv2()
+                auth_token = self._get_websocket_token()
                 host = 'wss://{}/webtunnelv2/{}?X-Node-Id={}'.format(self.dns_name, auth_token, self.node_id)
 
             verify_mode = ssl.CERT_NONE if should_disable_connection_verify() else ssl.CERT_REQUIRED
