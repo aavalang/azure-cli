@@ -8239,15 +8239,11 @@ def ssh_bastion_host(cmd, auth_type, target_resource_id, resource_group_name, ba
     if not is_valid_resource_id(target_resource_id):
         raise InvalidArgumentValueError("Please enter a valid resource Id. If this is not working, try opening the JSON View of your resource (in the Overview tab), and copying the full resource id.")
 
-    #tunnel_server = get_tunnel(cmd, resource_group_name, bastion_host_name, target_resource_id, resource_port)
-    #datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
-
     client = network_client_factory(cmd.cli_ctx).bastion_hosts
     bastion = client.get(resource_group_name, bastion_host_name)
 
     if bastion.sku.name == 'QuickConnect':
         datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
-        #datapod_url = "15b0b636c08247d08478a87779f0084e.data.test.bastionglobal.azure.com"
         logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
         dns_name = datapod_url
     else:
@@ -8255,13 +8251,12 @@ def ssh_bastion_host(cmd, auth_type, target_resource_id, resource_group_name, ba
 
     tunnel_server = get_tunnel(cmd, resource_group_name, dns_name, bastion, target_resource_id, resource_port)
     t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
-
     t.daemon = True
     t.start()
     if auth_type.lower() == 'password':
         if username is None:
             raise RequiredArgumentMissingError("Please enter username with --username.")
-        command = [_get_ssh_path(), "-vvv", _get_host(username, 'localhost')]
+        command = [_get_ssh_path(), _get_host(username, 'localhost')]
     elif auth_type.lower() == 'aad':
         azssh = _get_azext_module(SSH_EXTENSION_NAME, SSH_EXTENSION_MODULE)
         azssh_utils = _get_azext_module(SSH_EXTENSION_NAME, SSH_UTILS_EXTENSION_MODULE)
