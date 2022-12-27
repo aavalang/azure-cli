@@ -8304,18 +8304,13 @@ def rdp_bastion_host(cmd, target_resource_id, resource_group_name, bastion_host_
         if bastion.sku.name == "Basic" or bastion.sku.name == "Standard" and bastion.enable_tunneling != True:
             raise CLIError('Bastion Host SKU must be Standard and Native Client must be enabled.')
 
-        if bastion.sku.name == 'QuickConnect':
-            datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
-            logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
-            tunnel_server = get_tunnel(cmd, bastion, datapod_url, bastion, target_resource_id, resource_port)
-            t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
-            t.daemon = True
-            t.start()
-            command = [_get_rdp_path(), "/v:localhost:{0}".format(tunnel_server.local_port)]
-            launch_and_wait(command)
-            tunnel_server.cleanup()
-        elif disable_gateway:
-            tunnel_server = get_tunnel(cmd, resource_group_name, bastion.dns_name, bastion, target_resource_id, resource_port)
+        if disable_gateway:
+            if bastion.sku.name == 'QuickConnect':
+                datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
+                logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
+                tunnel_server = get_tunnel(cmd, bastion, datapod_url, bastion, target_resource_id, resource_port)
+            else:
+                tunnel_server = get_tunnel(cmd, resource_group_name, bastion.dns_name, bastion, target_resource_id, resource_port)
             t = threading.Thread(target=_start_tunnel, args=(tunnel_server,))
             t.daemon = True
             t.start()
@@ -8326,9 +8321,12 @@ def rdp_bastion_host(cmd, target_resource_id, resource_group_name, bastion_host_
             profile = Profile(cli_ctx=cmd.cli_ctx)
             access_token = profile.get_raw_token()[0][2].get('accessToken')
             logger.debug("Response %s", access_token)
-            client = network_client_factory(cmd.cli_ctx).bastion_hosts
-            bastion = client.get(resource_group_name, bastion_host_name)
-            web_address = 'https://{}/api/rdpfile?resourceId={}&format=rdp'.format(bastion.dns_name, target_resource_id)
+            if bastion.sku.name == 'QuickConnect':
+                datapod_url = _get_data_pod(cmd, resource_port, target_resource_id, bastion)
+                logger.warning('Data pod url: %s', "https://" + datapod_url + "/")
+                web_address = 'https://{}/api/rdpfile?resourceId={}&format=rdp'.format(datapod_url, target_resource_id)
+            else:
+                web_address = 'https://{}/api/rdpfile?resourceId={}&format=rdp'.format(bastion.dns_name, target_resource_id)
             headers = {}
             headers['Authorization'] = 'Bearer {}'.format(access_token)
             headers['Accept'] = '*/*'
